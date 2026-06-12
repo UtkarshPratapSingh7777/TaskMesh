@@ -1,0 +1,1119 @@
+================================================================================
+FLOWFORGE — COMPLETE PROJECT EXPLANATION
+================================================================================
+
+Generated documentation describing how the entire FlowForge project works,
+including every major component, module, class, and function.
+
+================================================================================
+1. WHAT IS FLOWFORGE?
+================================================================================
+
+FlowForge is a compact, distributed workflow scheduler built for internship/demo
+scope. It demonstrates how a job scheduling system works without relying on
+external queue libraries like Redis, BullMQ, Celery, or Airflow.
+
+Core design:
+  - The API (Express + Mongoose) is the MASTER / scheduler node.
+  - MongoDB is the single source of truth for jobs, workers, and workflows.
+  - Worker processes poll the API for assigned jobs, execute them, and report
+    back completion or failure.
+  - Scheduling logic is handwritten: custom MinHeap, MaxHeap, topological sort,
+    cycle detection, and a SchedulerLoop that runs inside the API process.
+
+Three packages:
+  api/     — Express REST API, MongoDB models, services, custom scheduler engine
+  worker/  — Axios-based executor node (polling, heartbeat, lease renewal)
+  ui/      — React + Vite + Tailwind dashboard for monitoring and management
+
+Infrastructure (docker-compose.yml):
+  mongo   — MongoDB 7 on port 27017
+  api     — API on port 3000
+  worker  — Worker process (connects to api internally)
+  ui      — Dashboard on port 5173 (proxies /api to the API service)
+
+
+================================================================================
+2. HIGH-LEVEL END-TO-END FLOW
+================================================================================
+
+A) STANDALONE JOB LIFECYCLE
+---------------------------
+
+  1. Client (UI or curl) POST /api/jobs with name, payload, priority, runAt.
+  2. job.service.createJob() persists a Job document with status PENDING.
+  3. job.controller.createJob() calls scheduler.trackJob(job) to enqueue it.
+  4. SchedulerLoop places the job in the delay queue (MinHeap) if runAt is
+     within the scheduling window, or waits for preloadWindow() to pick it up.
+  5. Every tick (500ms default), processDelayQueue() checks the MinHeap head.
+     When runAt <= now, it calls jobService.markReady() → status becomes READY.
+  6. The job moves to the ready queue (MaxHeap), sorted by priority.
+  7. Every tick, assignReadyJobs() finds an available worker via Assigner,
+     then atomically assigns the job (status RUNNING, lease set, attempts++).
+  8. Worker Poller polls GET /workers/:id/assignments every 1s, sees the job.
+  9. Processor.run(job) picks an executor, runs the job, renews lease periodically.
+  10. On success: POST .../complete → job COMPLETED.
+      On failure: POST .../fail → retryOrFail() → RETRYING or FAILED.
+  11. If RETRYING, job re-enters delay queue with exponential backoff runAt.
+  12. MongoDB ChangeStream (if available) also pushes job updates to scheduler.
+
+
+B) WORKFLOW (DAG) LIFECYCLE
+---------------------------
+
+  1. Client POST /api/workflows with nodes[] and edges[] defining a DAG.
+  2. workflow.service validates graph (no cycles, valid edges, unique node ids).
+  3. topologicalSort() computes execution order; root nodes (no inbound edges)
+     get status PENDING; others get WAITING.
+  4. Jobs are created only for root nodes initially.
+  5. As each job completes, advanceWorkflowAfterJobCompletion() marks the
+     workflow node COMPLETED and checks child nodes — when ALL parents of a
+     child are COMPLETED, that child gets a new job created and status PENDING.
+  6. When all nodes COMPLETED → workflow status COMPLETED.
+  7. If any job permanently FAILS → workflow node and workflow both FAILED.
+
+
+C) WORKER LIFECYCLE
+-------------------
+
+  1. Worker starts, POST /api/workers/register with workerId, cpu, memory, capacity.
+  2. Heartbeat loop POST /api/workers/heartbeat every 5s (default).
+  3. Poller GET /api/workers/:id/assignments every 1s.
+  4. Scheduler assigns jobs only to ACTIVE workers with recent heartbeat and
+     load < capacity.
+  5. If heartbeat stops for 15s, detectDeadWorkers() marks worker DEAD and
+     retries/fails all its RUNNING jobs.
+  6. If lease expires (30s default, not renewed), recoverExpiredLeases() retries
+     or fails the job.
+
+
+D) JOB STATUS STATE MACHINE
+---------------------------
+
+  PENDING   → waiting for runAt; in delay queue
+  READY     → runAt reached; in ready queue, waiting for worker
+  RUNNING   → assigned to a worker; lease active
+  RETRYING  → failed but attempts < maxAttempts; back in delay queue
+  COMPLETED → terminal success
+  FAILED    → terminal failure (max attempts exceeded)
+  CANCELED  → terminal cancel (user-initiated)
+
+
+================================================================================
+3. PROJECT DIRECTORY STRUCTURE
+================================================================================
+
+Flow_Forge/
+├── docker-compose.yml          Orchestrates mongo, api, worker, ui
+├── README.md                   Quick start and API surface
+├── explanation.txt             This file
+│
+├── api/
+│   ├── Dockerfile
+│   ├── .env.example
+│   ├── package.json
+│   └── src/
+│       ├── index.js                    Entry point: Express + SchedulerLoop
+│       ├── config/
+│       │   └── database.js             MongoDB connection
+│       ├── models/
+│       │   ├── Job.js                  Job schema and helpers
+│       │   ├── Worker.js               Worker schema and helpers
+│       │   └── Workflow.js             Workflow DAG schema
+│       ├── services/
+│       │   ├── job.service.js          Job CRUD, scheduling helpers
+│       │   ├── worker.service.js       Worker registration, heartbeat
+│       │   └── workflow.service.js     Workflow CRUD, DAG advancement
+│       ├── engine/
+│       │   ├── collections/
+│       │   │   ├── MinHeap.js          Delay queue (earliest runAt)
+│       │   │   └── MaxHeap.js          Ready queue (highest priority)
+│       │   ├── graph/
+│       │   │   ├── TopoSort.js         Kahn's algorithm topological sort
+│       │   │   └── CycleDetector.js    Cycle detection via topo sort
+│       │   └── orchestration/
+│       │       ├── SchedulerLoop.js    Main scheduler tick loop
+│       │       ├── Assigner.js         Worker selection and job assignment
+│       │       └── ChangeStream.js     MongoDB change stream listener
+│       └── api/
+│           ├── controllers/            HTTP handlers
+│           ├── routes/                 Express routers
+│           └── middlewares/            CORS and error handling
+│
+├── worker/
+│   ├── Dockerfile
+│   ├── .env.example
+│   ├── package.json
+│   └── src/
+│       ├── index.js                    Worker entry point
+│       ├── config/env.js               Environment variable loader
+│       ├── network/apiClient.js          Axios HTTP client wrapper
+│       ├── core/
+│       │   ├── Poller.js               Polls for assigned jobs
+│       │   ├── Processor.js            Executes jobs, renews leases
+│       │   └── Heartbeat.js            Periodic heartbeat sender
+│       └── executors/
+│           ├── index.js                Executor router (pickExecutor)
+│           ├── email.executor.js         Simulated email job
+│           └── report.executor.js        Simulated report job
+│
+└── ui/
+    ├── Dockerfile
+    ├── vite.config.js                  Dev server + API proxy
+    ├── package.json
+    ├── index.html
+    └── src/
+        ├── main.jsx                    React entry + QueryClientProvider
+        ├── App.jsx                     Root app: tabs, queries, mutations
+        ├── index.css                   Tailwind styles
+        ├── lib/
+        │   ├── axios.js                Axios instance for /api
+        │   └── react-query.js          TanStack Query client config
+        ├── components/
+        │   ├── layouts/DashboardLayout.jsx
+        │   └── ui/                     Button, StatTile, StatusPill
+        └── features/
+            ├── jobs/                   JobsView, JobTable, jobs.api
+            ├── workers/                WorkersView
+            └── workflows/              WorkflowsView, WorkflowGraph
+
+
+================================================================================
+4. API PACKAGE — DETAILED BREAKDOWN
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 api/src/index.js — Application Entry Point
+--------------------------------------------------------------------------------
+
+Purpose: Bootstraps MongoDB, Express, routes, and the SchedulerLoop.
+
+config object (built from env vars):
+  nodeEnv, port, mongoUrl, workerLeaseMs
+  scheduler: { windowMs, preloadEveryMs, recoveryEveryMs, tickEveryMs,
+               heartbeatTimeoutMs, leaseMs }
+
+main() async function:
+  1. connectDatabase(config.mongoUrl)
+  2. Create Express app and SchedulerLoop(config.scheduler)
+  3. Attach scheduler and config to app.locals (accessible in controllers)
+  4. Register middleware: corsMiddleware, express.json
+  5. GET /api/health → returns { ok, env, scheduler: scheduler.health() }
+  6. Mount routes: /api/jobs, /api/workers, /api/workflows
+  7. notFound + errorMiddleware
+  8. scheduler.start()
+  9. app.listen(config.port)
+  10. SIGINT/SIGTERM → scheduler.stop(), server.close(), exit
+
+
+--------------------------------------------------------------------------------
+4.2 api/src/config/database.js
+--------------------------------------------------------------------------------
+
+connectDatabase(mongoUrl)
+  - Sets mongoose strictQuery = true
+  - Calls mongoose.connect(mongoUrl)
+  - Returns mongoose.connection
+
+
+--------------------------------------------------------------------------------
+4.3 api/src/models/Job.js — Job Data Model
+--------------------------------------------------------------------------------
+
+Constants:
+  JOB_STATUS: PENDING, READY, RUNNING, RETRYING, COMPLETED, FAILED, CANCELED
+  SCHEDULABLE_STATUSES: [PENDING, RETRYING]  — eligible for scheduling
+  TERMINAL_STATUSES: [COMPLETED, FAILED, CANCELED]
+
+Schema fields:
+  id          — unique string (e.g. job_a1b2c3d4)
+  name        — human-readable job name
+  payload     — Mixed JSON (executor input)
+  status      — one of JOB_STATUS
+  priority    — 0-100 (default 5); higher = more urgent in ready queue
+  attempts    — current attempt count
+  maxAttempts — max retries before FAILED (default 4)
+  assignedWorker — worker id when RUNNING
+  runAt       — when job becomes eligible
+  leaseExpiry — when worker lease expires (null if not running)
+  workflowId, workflowNodeId — link to parent workflow (optional)
+  result      — output on completion
+  error       — error message on failure
+  startedAt, completedAt — timestamps
+  createdAt, updatedAt — auto timestamps
+
+Index: { status: 1, runAt: 1 }
+
+isSchedulableJob(status)
+  Returns true if status is PENDING or RETRYING.
+
+isTerminalJob(status)
+  Returns true if status is COMPLETED, FAILED, or CANCELED.
+
+serializeJob(job)
+  Converts Mongoose doc to plain JSON, removes _id.
+
+
+--------------------------------------------------------------------------------
+4.4 api/src/models/Worker.js — Worker Data Model
+--------------------------------------------------------------------------------
+
+Constants:
+  WORKER_STATUS: ACTIVE, DEAD
+
+Schema fields:
+  id            — unique string (e.g. worker_a1b2c3d4)
+  status        — ACTIVE or DEAD
+  cpu           — reported CPU cores (default 2)
+  memory        — reported memory GB (default 4)
+  capacity      — max concurrent jobs (default 2)
+  lastHeartbeat — last heartbeat timestamp
+  registeredAt  — first registration time
+
+serializeWorker(worker, load = 0)
+  Converts to JSON, removes _id, adds computed `load` field (running job count).
+
+
+--------------------------------------------------------------------------------
+4.5 api/src/models/Workflow.js — Workflow DAG Model
+--------------------------------------------------------------------------------
+
+Constants:
+  WORKFLOW_STATUS: WAITING, PENDING, RUNNING, COMPLETED, FAILED, CANCELED
+
+Sub-schemas:
+  workflowNodeSchema: id, name, payload, priority, status, jobId
+  workflowEdgeSchema: from, to
+
+Schema fields:
+  id               — unique workflow id
+  name             — workflow name
+  nodes[]          — array of workflow nodes
+  edges[]          — directed edges (from → to)
+  topologicalOrder — computed execution order
+  status           — overall workflow status
+
+serializeWorkflow(workflow)
+  Converts to plain JSON, removes _id.
+
+
+--------------------------------------------------------------------------------
+4.6 api/src/engine/collections/MinHeap.js — Minimum Priority Queue
+--------------------------------------------------------------------------------
+
+Used for the DELAY QUEUE: jobs sorted by earliest runAt.
+
+Class MinHeap
+  constructor(compare)
+    compare — custom comparator; negative means a is "smaller" (higher priority)
+
+  size()       — returns items.length
+  peek()       — returns root (smallest per compare) or null
+  insert(item) — push + bubbleUp
+  extract()    — remove and return root; bubbleDown new root
+  remove(predicate) — remove all items matching predicate, re-heapify
+  toArray()    — shallow copy of internal array
+
+  bubbleUp(index)   — swap with parent while compare says child is smaller
+  bubbleDown(index) — swap with smaller child while needed
+  swap(a, b)        — exchange two array positions
+
+In SchedulerLoop, compareDelayedJobs sorts by:
+  1. runAt ascending (earliest first)
+  2. priority descending (higher priority wins ties)
+  3. id lexicographic (deterministic tie-break)
+
+
+--------------------------------------------------------------------------------
+4.7 api/src/engine/collections/MaxHeap.js — Maximum Priority Queue
+--------------------------------------------------------------------------------
+
+Used for the READY QUEUE: jobs sorted by highest priority.
+
+Same API as MinHeap but bubbleUp/bubbleDown use inverted comparison (parent
+must be larger than children).
+
+In SchedulerLoop, compareReadyJobs sorts by:
+  1. priority descending (highest first)
+  2. runAt ascending (older scheduled jobs first)
+  3. id lexicographic descending (deterministic tie-break)
+
+
+--------------------------------------------------------------------------------
+4.8 api/src/engine/graph/TopoSort.js — Topological Sort
+--------------------------------------------------------------------------------
+
+topologicalSort(nodes, edges)
+  Implements Kahn's algorithm:
+  1. Build adjacency list and indegree map from node ids and edges.
+  2. Seed queue with all nodes having indegree 0.
+  3. Repeatedly dequeue, append to order, decrement child indegrees.
+  4. Enqueue children when indegree reaches 0.
+  Returns: array of node ids in valid topological order.
+  Note: if graph has a cycle, returned length < nodes.length.
+
+
+--------------------------------------------------------------------------------
+4.9 api/src/engine/graph/CycleDetector.js — Cycle Detection
+--------------------------------------------------------------------------------
+
+hasCycle(nodes, edges)
+  Calls topologicalSort(); if result length !== nodes.length, a cycle exists.
+  Returns: boolean.
+
+
+--------------------------------------------------------------------------------
+4.10 api/src/engine/orchestration/Assigner.js — Worker Selection
+--------------------------------------------------------------------------------
+
+findAvailableWorker(heartbeatTimeoutMs)
+  1. Query ACTIVE workers with lastHeartbeat >= (now - timeout).
+  2. For each worker, count RUNNING jobs assigned to them (load).
+  3. Filter to workers where load < capacity.
+  4. Sort by utilization (load/capacity) ascending — least loaded first.
+  5. Return best candidate or null.
+
+assignJob(jobId, workerId, leaseMs)
+  Atomic findOneAndUpdate:
+    Match: { id: jobId, status: READY }
+    Set: status RUNNING, assignedWorker, leaseExpiry = now + leaseMs, startedAt
+    Inc: attempts + 1
+  Returns serialized job or null if already taken.
+
+
+--------------------------------------------------------------------------------
+4.11 api/src/engine/orchestration/ChangeStream.js — Real-time Sync
+--------------------------------------------------------------------------------
+
+startJobChangeStream(scheduler)
+  Opens MongoDB change stream on Job collection (updateLookup).
+  On each change with fullDocument → scheduler.trackJob(fullDocument).
+  On error → logs warning and closes stream (graceful degradation).
+  Returns stream or null if unavailable (e.g. standalone Mongo without replica set).
+
+
+--------------------------------------------------------------------------------
+4.12 api/src/engine/orchestration/SchedulerLoop.js — Core Scheduler
+--------------------------------------------------------------------------------
+
+Class SchedulerLoop — the heart of FlowForge scheduling.
+
+Constructor options:
+  windowMs (60s)         — how far ahead to preload schedulable jobs
+  preloadEveryMs (5s)  — interval to reload jobs from DB into heaps
+  recoveryEveryMs (10s)— interval for lease recovery and dead worker detection
+  tickEveryMs (500ms)  — interval for delay→ready promotion and assignment
+  heartbeatTimeoutMs (15s)
+  leaseMs (30s)
+
+Internal state:
+  delayQueue (MinHeap)  — PENDING/RETRYING jobs waiting for runAt
+  readyQueue (MaxHeap)  — READY jobs waiting for worker
+  delayIds, readyIds (Sets) — dedup tracking
+  changeStream          — MongoDB watcher
+  timers[]              — setInterval handles
+
+start()
+  Sets started=true, opens change stream, runs initial preload + lease recovery,
+  then registers periodic tasks:
+    - preloadWindow every preloadEveryMs
+    - processDelayQueue every tickEveryMs
+    - assignReadyJobs every tickEveryMs
+    - recoverExpiredLeases every recoveryEveryMs
+    - detectDeadWorkers every recoveryEveryMs
+
+stop()
+  Clears all intervals, closes change stream.
+
+health()
+  Returns { started, delayQueueDepth, readyQueueDepth, windowMs, leaseMs }.
+
+preloadWindow()
+  Fetches schedulable jobs with runAt <= now + windowMs from DB.
+  Calls trackJob() for each.
+
+processDelayQueue()
+  While delay heap head has runAt <= now:
+    extract from delay queue, markReady in DB, trackJob (moves to ready queue).
+
+assignReadyJobs()
+  While ready queue non-empty:
+    find available worker; if none, break.
+    extract highest-priority ready job, assignJob to worker.
+    If successfully RUNNING, remove from queues.
+
+recoverExpiredLeases()
+  Find RUNNING jobs with leaseExpiry <= now.
+  For each: retryOrFail('Lease expired').
+  If FAILED → advanceWorkflowAfterJobFailure.
+  trackJob updated job.
+
+detectDeadWorkers()
+  Find ACTIVE workers with stale heartbeat.
+  markWorkerDead each.
+  For each job assigned to dead worker: retryOrFail('Worker heartbeat expired').
+  Handle workflow failure and re-track jobs.
+
+trackJob(job)
+  Routes job to correct queue based on status:
+    READY     → insertReady (remove from delay first)
+    PENDING/RETRYING → insertDelayed if within window (remove from ready first)
+    Other (terminal/running) → removeJob from both queues
+
+removeJob(jobId)       — remove from both delay and ready queues
+insertDelayed(job)     — add snapshot to delay heap + delayIds set
+insertReady(job)       — add snapshot to ready heap + readyIds set
+removeFromDelay(jobId) — conditional remove from delay heap
+removeFromReady(jobId) — conditional remove from ready heap
+
+every(ms, task)        — setInterval wrapper with re-entry guard (running flag)
+runSafely(task)        — try/catch wrapper for one-shot async tasks
+
+Helper functions (module level):
+  snapshot(job) — { id, name, priority, runAt, status } for heap storage
+  compareDelayedJobs(a, b) — MinHeap comparator for delay queue
+  compareReadyJobs(a, b)     — MaxHeap comparator for ready queue
+
+
+--------------------------------------------------------------------------------
+4.13 api/src/services/job.service.js — Job Business Logic
+--------------------------------------------------------------------------------
+
+Internal helpers:
+
+createId(prefix)
+  Returns `${prefix}_${crypto.randomUUID().slice(0, 8)}`.
+
+coercePayload(value)
+  Returns value if plain object, else {}.
+
+coercePriority(value)
+  Clamps to 0-100 integer; default 5.
+
+coerceAttempts(value)
+  Clamps maxAttempts to 1-20; default 4.
+
+coerceRunAt(runAt, delaySeconds)
+  Priority: delaySeconds → absolute runAt → Date.now().
+
+exponentialBackoffMs(attemptNumber, baseMs = 30000)
+  Returns baseMs * 2^(attemptNumber - 1). E.g. attempt 1 → 30s, 2 → 60s, 3 → 120s.
+
+Public functions:
+
+createJob(input)
+  Creates Job in DB with generated id, coerced fields, status PENDING.
+  Returns serialized job.
+
+listJobs(filter)
+  Optional filter by status, workflowId. Sorted by createdAt desc.
+
+getJob(jobId)
+  Find one by id, serialize.
+
+updateJob(jobId, patch)
+  Partial update: name, payload, priority, maxAttempts, runAt/delaySeconds.
+  If schedule fields change on non-terminal job → reset to PENDING, clear worker/lease.
+
+deleteJob(jobId)
+  deleteOne; returns boolean deleted.
+
+cancelJob(jobId)
+  If not terminal → status CANCELED, clear worker/lease.
+
+markReady(jobId)
+  Atomic update PENDING/RETRYING → READY. Returns serialized job.
+
+getSchedulableJobs(windowEnd)
+  Find PENDING/RETRYING with runAt <= windowEnd.
+
+getLeaseExpiredJobs(now)
+  Find RUNNING with leaseExpiry <= now.
+
+listAssignedJobs(workerId)
+  Find RUNNING jobs for worker.
+
+renewLease(workerId, jobId, leaseMs)
+  Extend leaseExpiry for matching RUNNING job.
+
+completeJob(workerId, jobId, result)
+  Atomic RUNNING → COMPLETED with result, completedAt.
+
+failJob(workerId, jobId, error)
+  Finds RUNNING job, delegates to retryOrFail.
+
+retryOrFail(jobOrId, error)
+  Sets error message, clears worker/lease.
+  If attempts < maxAttempts → RETRYING + exponential backoff runAt.
+  Else → FAILED + completedAt.
+  Saves and returns serialized job.
+
+getStats()
+  Aggregates job counts by status, worker counts, failure rate, queue depth.
+  Returns { jobs, totalJobs, activeWorkers, deadWorkers, runningJobs,
+            failureRate, queueDepth }.
+
+seedDemoJobs()
+  Creates 3 demo jobs (email, report, generic) with staggered runAt.
+
+
+--------------------------------------------------------------------------------
+4.14 api/src/services/worker.service.js — Worker Business Logic
+--------------------------------------------------------------------------------
+
+createId(prefix) — same pattern as job service.
+
+positiveInteger(value, fallback)
+  Parses number; returns rounded positive int or fallback.
+
+registerWorker(input)
+  Upsert worker by workerId/id. Sets ACTIVE, cpu, memory, capacity, heartbeat.
+  Returns serialized worker with current load.
+
+heartbeat(workerId)
+  Updates lastHeartbeat and ACTIVE status. Returns worker + load.
+
+listWorkers()
+  All workers sorted by id, each with load from loadMap().
+
+getWorker(workerId)
+  Single worker + load.
+
+markWorkerDead(workerId)
+  ACTIVE → DEAD if currently active.
+
+getExpiredWorkers(heartbeatTimeoutMs)
+  ACTIVE workers with lastHeartbeat < cutoff.
+
+countWorkerLoad(workerId)
+  Count RUNNING jobs for worker.
+
+loadMap()
+  Aggregation: { assignedWorker → running count } for all RUNNING jobs.
+
+
+--------------------------------------------------------------------------------
+4.15 api/src/services/workflow.service.js — Workflow DAG Logic
+--------------------------------------------------------------------------------
+
+Internal helpers:
+
+createId(prefix), normalizePayload(value), normalizePriority(value)
+slugify(value) — lowercase, non-alnum → underscore, for auto node ids.
+
+normalizeNodes(nodes)
+  Accepts strings or objects. Throws if empty. Returns normalized node array.
+
+normalizeEdges(edges)
+  Accepts {from,to} objects or [from,to] arrays.
+
+validateGraph(nodes, edges)
+  Checks unique ids, valid edge endpoints, no cycles (hasCycle).
+
+getRootNodeIds(nodes, edges)
+  Nodes with no inbound edges.
+
+getChildNodeIds(nodeId, edges) / getParentNodeIds(nodeId, edges)
+  Graph traversal helpers.
+
+createWorkflowJob(workflow, node, runAt)
+  Creates a job linked to workflow via createJob().
+
+Public functions:
+
+createWorkflow(input)
+  1. Normalize and validate nodes/edges.
+  2. Compute topologicalOrder.
+  3. Root nodes → PENDING; others → WAITING.
+  4. Create workflow document (status RUNNING).
+  5. Create jobs for root nodes, store jobId on each node.
+  6. Save and return serialized workflow.
+
+listWorkflows() / getWorkflow(workflowId)
+  Standard CRUD reads.
+
+deleteWorkflow(workflowId)
+  Cancels all non-terminal jobs for workflow, deletes workflow document.
+
+advanceWorkflowAfterJobCompletion(job)
+  1. Find workflow and completed node.
+  2. Mark node COMPLETED.
+  3. For each child: if all parents COMPLETED and child WAITING → create job,
+     set child PENDING.
+  4. If all nodes COMPLETED → workflow COMPLETED.
+  5. Save and return workflow.
+
+advanceWorkflowAfterJobFailure(job)
+  If job FAILED with workflow link → mark node FAILED, workflow FAILED.
+
+
+--------------------------------------------------------------------------------
+4.16 api/src/api/controllers — HTTP Request Handlers
+--------------------------------------------------------------------------------
+
+job.controller.js:
+  listJobs(req, res)     — jobService.listJobs(req.query)
+  createJob(req, res)    — create + scheduler.trackJob + 201
+  getJob(req, res)       — 404 if missing
+  updateJob(req, res)    — update + scheduler.trackJob
+  deleteJob(req, res)    — delete + scheduler.removeJob
+  cancelJob(req, res)    — cancel + scheduler.removeJob
+  stats(req, res)        — job stats + scheduler.health() as queues
+  seedDemo(req, res)     — seedDemoJobs + scheduler.preloadWindow
+
+worker.controller.js:
+  listWorkers, register, heartbeat, getWorker, assignments
+  completeJob — completeJob + advanceWorkflowAfterJobCompletion
+  failJob     — failJob + workflow failure if FAILED + scheduler.trackJob
+  renewLease  — uses config.workerLeaseMs from app.locals
+
+workflow.controller.js:
+  listWorkflows, createWorkflow (+ preloadWindow), getWorkflow, deleteWorkflow
+
+
+--------------------------------------------------------------------------------
+4.17 api/src/api/routes — Express Routers
+--------------------------------------------------------------------------------
+
+job.routes.js:
+  GET    /              listJobs
+  POST   /              createJob
+  GET    /stats         stats
+  POST   /demo          seedDemo
+  GET    /:jobId        getJob
+  PATCH  /:jobId        updateJob
+  DELETE /:jobId        deleteJob
+  POST   /:jobId/cancel cancelJob
+
+worker.routes.js:
+  GET    /                                    listWorkers
+  POST   /register                            register
+  POST   /heartbeat                           heartbeat
+  GET    /:workerId                           getWorker
+  GET    /:workerId/assignments               assignments
+  POST   /:workerId/jobs/:jobId/complete      completeJob
+  POST   /:workerId/jobs/:jobId/fail          failJob
+  POST   /:workerId/jobs/:jobId/lease         renewLease
+
+workflow.routes.js:
+  GET    /              listWorkflows
+  POST   /              createWorkflow
+  GET    /:workflowId   getWorkflow
+  DELETE /:workflowId   deleteWorkflow
+
+All routes use wrap(handler) — Promise.resolve(handler).catch(next) for async errors.
+
+
+--------------------------------------------------------------------------------
+4.18 api/src/api/middlewares
+--------------------------------------------------------------------------------
+
+cors.middleware.js — corsMiddleware(req, res, next)
+  Sets Access-Control-Allow-Origin: *
+  Allows Content-Type header, GET/POST/PATCH/DELETE/OPTIONS.
+  OPTIONS → 204, else next().
+
+error.middleware.js:
+  httpError(status, message) — creates Error with .status property
+  notFound(req, res)           — 404 JSON
+  errorMiddleware(err, req, res, next) — sends err.status or 500 JSON
+
+
+================================================================================
+5. WORKER PACKAGE — DETAILED BREAKDOWN
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 worker/src/index.js — Worker Entry Point
+--------------------------------------------------------------------------------
+
+main():
+  1. loadEnv() → config
+  2. createApiClient(config.apiBaseUrl)
+  3. POST /workers/register with workerId, cpu, memory, capacity
+  4. startHeartbeat(client, workerId, heartbeatEveryMs)
+  5. new Processor(client, config)
+  6. new Poller(client, config, processor) → poller.start()
+  7. SIGINT/SIGTERM → clear heartbeat, poller.stop(), exit
+
+
+--------------------------------------------------------------------------------
+5.2 worker/src/config/env.js
+--------------------------------------------------------------------------------
+
+numberFromEnv(name, fallback)
+  Parses process.env[name] as number; returns fallback if NaN.
+
+loadEnv()
+  Returns {
+    apiBaseUrl:     API_BASE_URL or http://localhost:3000/api
+    workerId:       WORKER_ID or random worker-xxxxxx
+    cpu:            WORKER_CPU default 2
+    memory:         WORKER_MEMORY default 4
+    capacity:       WORKER_CAPACITY default 2
+    heartbeatEveryMs: WORKER_HEARTBEAT_MS default 5000
+    pollEveryMs:    WORKER_POLL_MS default 1000
+    leaseRenewEveryMs: WORKER_LEASE_RENEW_MS default 10000
+  }
+
+
+--------------------------------------------------------------------------------
+5.3 worker/src/network/apiClient.js
+--------------------------------------------------------------------------------
+
+createApiClient(baseURL)
+  Creates axios instance (10s timeout, JSON headers).
+  Returns { get(pathname), post(pathname, body) } — both return response.data.
+
+
+--------------------------------------------------------------------------------
+5.4 worker/src/core/Heartbeat.js
+--------------------------------------------------------------------------------
+
+startHeartbeat(client, workerId, everyMs)
+  Defines beat() — POST /workers/heartbeat { workerId }, catches errors.
+  Calls beat() immediately, then setInterval(beat, everyMs).
+  Returns timer handle for cleanup.
+
+
+--------------------------------------------------------------------------------
+5.5 worker/src/core/Poller.js
+--------------------------------------------------------------------------------
+
+Class Poller
+  constructor(client, config, processor)
+
+  start()
+    Calls poll() once, then setInterval(poll, pollEveryMs).
+
+  stop()
+    clearInterval(timer).
+
+  poll()
+    Re-entry guard (running flag).
+    GET /workers/:workerId/assignments → for each job: processor.run(job).
+    Catches and logs poll failures.
+
+
+--------------------------------------------------------------------------------
+5.6 worker/src/core/Processor.js
+--------------------------------------------------------------------------------
+
+Class Processor
+  constructor(client, config)
+  processing — Set of job ids currently being executed (dedup).
+
+  run(job)
+    Skip if job.id already in processing Set.
+    Add to Set, call process(job), remove from Set in finally.
+
+  process(job)
+    1. Log start.
+    2. startLeaseRenewal(job.id) — interval POST .../lease every leaseRenewEveryMs.
+    3. pickExecutor(job)(job) → result.
+    4. POST .../complete { result }.
+    5. On error: POST .../fail { error: message }.
+    6. finally: clearInterval(leaseTimer).
+
+  startLeaseRenewal(jobId)
+    Returns setInterval that POST /workers/:id/jobs/:jobId/lease periodically.
+
+
+--------------------------------------------------------------------------------
+5.7 worker/src/executors — Job Execution Handlers
+--------------------------------------------------------------------------------
+
+executors/index.js:
+
+pickExecutor(job)
+  Reads job.payload.kind:
+    'email'  → executeEmail
+    'report' → executeReport
+    default  → executeDefault
+
+executeDefault(job)
+  Sleeps payload.durationMs or 1000ms.
+  Throws if payload.fail === true.
+  Returns { executor: 'default', message, durationMs }.
+
+email.executor.js — execute(job)
+  Sleeps durationMs or 800ms.
+  Returns { executor: 'email', message with tenant }.
+
+report.executor.js — execute(job)
+  Sleeps durationMs or 1200ms.
+  Returns { executor: 'report', message with report name }.
+
+All executors simulate work via sleep(); no real email/report integration.
+
+
+================================================================================
+6. UI PACKAGE — DETAILED BREAKDOWN
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 ui/vite.config.js
+--------------------------------------------------------------------------------
+
+Vite dev server on 0.0.0.0:5173.
+Proxy /api → VITE_PROXY_API_URL or http://localhost:3000 (Docker uses api:3000).
+Plugins: @vitejs/plugin-react, @tailwindcss/vite.
+
+
+--------------------------------------------------------------------------------
+6.2 ui/src/main.jsx
+--------------------------------------------------------------------------------
+
+Renders App inside React.StrictMode and QueryClientProvider with shared queryClient.
+Imports index.css for Tailwind.
+
+
+--------------------------------------------------------------------------------
+6.3 ui/src/lib/axios.js
+--------------------------------------------------------------------------------
+
+api — axios instance, baseURL: VITE_API_BASE_URL or '/api'
+
+unwrap(request)
+  Awaits axios promise, returns response.data.
+
+
+--------------------------------------------------------------------------------
+6.4 ui/src/lib/react-query.js
+--------------------------------------------------------------------------------
+
+queryClient — QueryClient with queries refetchInterval: 2500ms, retry: 1.
+Auto-refreshes dashboard data every 2.5 seconds.
+
+
+--------------------------------------------------------------------------------
+6.5 ui/src/App.jsx — Root Application
+--------------------------------------------------------------------------------
+
+State: activeTab ('jobs' | 'workers' | 'workflows')
+
+Queries (TanStack React Query):
+  ['jobs']      → listJobs
+  ['workers']   → GET /workers
+  ['workflows'] → GET /workflows
+  ['stats']     → getJobStats
+
+Mutations:
+  createJobMutation    → createJob, onSuccess: refresh
+  cancelJobMutation    → cancelJob
+  seedMutation         → seedDemoJobs
+  createWorkflowMutation → POST /workflows
+
+refresh()
+  Invalidates all four query keys.
+
+Renders DashboardLayout with stats, tab nav, seed/refresh buttons.
+Conditionally renders JobsView, WorkersView, or WorkflowsView.
+
+
+--------------------------------------------------------------------------------
+6.6 ui/src/components/layouts/DashboardLayout.jsx
+--------------------------------------------------------------------------------
+
+Props: activeTab, children, onRefresh, onSeed, onTabChange, stats
+
+Displays:
+  - Header with FlowForge branding
+  - Seed Demo and Refresh buttons
+  - 6 StatTiles: Queue Depth, Running, Completed, Failed, Workers, Failure Rate
+  - Tab navigation: Jobs, Workers, Workflows
+  - {children} content area
+
+
+--------------------------------------------------------------------------------
+6.7 ui/src/components/ui/
+--------------------------------------------------------------------------------
+
+StatTile({ label, value, tone })
+  Card with colored left border showing a metric.
+
+StatusPill({ status })
+  Colored badge for job/worker/workflow status (PENDING, RUNNING, etc.).
+
+Button({ children, tone, className, ...props })
+  Styled button: primary (blue), neutral (white), danger (rose).
+
+
+--------------------------------------------------------------------------------
+6.8 ui/src/features/jobs/
+--------------------------------------------------------------------------------
+
+jobs.api.js:
+  listJobs()      → GET /jobs
+  createJob(p)    → POST /jobs
+  cancelJob(id)   → POST /jobs/:id/cancel
+  seedDemoJobs()  → POST /jobs/demo
+  getJobStats()   → GET /jobs/stats
+
+JobsView({ jobs, onCancel, onCreate })
+  Left panel: form to create job (name, priority, delay, attempts, JSON payload).
+  Right panel: JobTable listing.
+
+JobTable({ jobs, onCancel })
+  Table columns: Name, Status, Priority, Attempts, Run At, Worker, Cancel button.
+  isTerminal(status) — COMPLETED, FAILED, CANCELED
+  formatDate(value) — Intl.DateTimeFormat localized string
+
+
+--------------------------------------------------------------------------------
+6.9 ui/src/features/workers/WorkersView.jsx
+--------------------------------------------------------------------------------
+
+WorkersView({ workers })
+  Grid of worker cards showing:
+    id, cpu/memory, status pill, utilization bar (load/capacity %),
+    load/capacity slots, timeAgo(lastHeartbeat).
+
+timeAgo(value)
+  Returns 'never', 'just now', 'Xs ago', or 'Xm ago'.
+
+
+--------------------------------------------------------------------------------
+6.10 ui/src/features/workflows/
+--------------------------------------------------------------------------------
+
+WorkflowsView({ workflows, onCreate })
+  Left: create workflow form (name, nodes JSON, edges JSON).
+  Right: workflow selector tabs, WorkflowSummary, WorkflowGraph.
+
+WorkflowGraph({ workflow })
+  SVG DAG visualization:
+    layoutDag(workflow) — assigns x/y by topological level and index within level.
+    Draws curved edges with arrow markers and node rectangles with name + status.
+
+WorkflowSummary({ workflow })
+  Shows workflow name, status pill, node count.
+
+layoutDag(workflow)
+  1. Compute level per node from topologicalOrder (max parent level + 1).
+  2. Bucket nodes by level.
+  3. Position: x = 36 + level*230, y = 38 + index*110.
+
+
+================================================================================
+7. CONFIGURATION REFERENCE
+================================================================================
+
+API (.env.example):
+  NODE_ENV=development
+  PORT=3000
+  MONGO_URL=mongodb://localhost:27017/flowforge
+  SCHEDULER_WINDOW_MS=60000        — preload horizon
+  SCHEDULER_PRELOAD_MS=5000        — DB reload interval
+  SCHEDULER_RECOVERY_MS=10000      — lease/dead worker check interval
+  SCHEDULER_TICK_MS=500            — delay/assign tick interval
+  WORKER_HEARTBEAT_TIMEOUT_MS=15000
+  WORKER_LEASE_MS=30000
+
+Worker (.env.example):
+  API_BASE_URL=http://localhost:3000/api
+  WORKER_ID=local-worker-1
+  WORKER_CPU=2
+  WORKER_MEMORY=4
+  WORKER_CAPACITY=2
+  WORKER_HEARTBEAT_MS=5000
+  WORKER_POLL_MS=1000
+  WORKER_LEASE_RENEW_MS=10000
+
+UI:
+  VITE_API_BASE_URL — optional override for axios base URL
+  VITE_PROXY_API_URL — vite dev proxy target (Docker: http://api:3000)
+
+
+================================================================================
+8. KEY DESIGN DECISIONS AND TRADE-OFFS
+================================================================================
+
+1. PULL-BASED WORKERS (not push)
+   Workers poll for assignments instead of the API pushing jobs. Simpler for
+   demo scope; workers can be behind NAT. Trade-off: up to pollEveryMs latency.
+
+2. IN-MEMORY HEAPS + MONGODB PERSISTENCE
+   Scheduler heaps are in-process for fast O(log n) queue ops. MongoDB is
+   source of truth; preloadWindow + change stream keep heaps in sync.
+
+3. LEASE-BASED EXECUTION
+   Jobs have leaseExpiry; worker must renew lease while running. Expired leases
+   trigger retry without requiring worker cooperation — fault tolerance.
+
+4. CAPACITY-AWARE ASSIGNMENT
+   Workers declare capacity; scheduler assigns to least-utilized worker first.
+   Prevents overloading a single worker.
+
+5. EXPONENTIAL BACKOFF RETRIES
+   Failed jobs retry with 30s, 60s, 120s... delays based on attempt count.
+   maxAttempts caps total tries before permanent FAILED.
+
+6. HANDWRITTEN GRAPH ALGORITHMS
+   TopoSort and CycleDetector validate workflow DAGs without external libs.
+   Educational/demo value: shows how dependency ordering works.
+
+7. NO REDIS / EXTERNAL QUEUE
+   Everything runs on MongoDB + in-memory heaps in the API process. Suitable
+   for single-master demo; not horizontally scaled scheduler by default.
+
+
+================================================================================
+9. TYPICAL OPERATION SEQUENCE (DOCKER)
+================================================================================
+
+  docker compose up --build
+
+  1. Mongo starts on 27017.
+  2. API connects, SchedulerLoop starts, listens on 3000.
+  3. Worker registers as docker-worker-1, starts heartbeat + polling.
+  4. UI starts on 5173, proxies /api to api:3000.
+
+  User opens http://localhost:5173:
+  - Clicks "Seed Demo" → 3 jobs created with staggered delays.
+  - Scheduler promotes jobs to READY, assigns to worker.
+  - Worker executes (email/report/default executors), reports complete.
+  - Dashboard auto-refreshes every 2.5s showing updated stats.
+
+  User creates workflow:
+  - Submits DAG via Workflows tab.
+  - Root jobs scheduled; graph updates as nodes complete.
+
+
+================================================================================
+10. API ENDPOINT QUICK REFERENCE
+================================================================================
+
+Health:
+  GET  /api/health
+
+Jobs:
+  POST   /api/jobs
+  GET    /api/jobs
+  GET    /api/jobs/:jobId
+  PATCH  /api/jobs/:jobId
+  DELETE /api/jobs/:jobId
+  POST   /api/jobs/:jobId/cancel
+  GET    /api/jobs/stats
+  POST   /api/jobs/demo
+
+Workers:
+  POST   /api/workers/register
+  POST   /api/workers/heartbeat
+  GET    /api/workers
+  GET    /api/workers/:workerId
+  GET    /api/workers/:workerId/assignments
+  POST   /api/workers/:workerId/jobs/:jobId/complete
+  POST   /api/workers/:workerId/jobs/:jobId/fail
+  POST   /api/workers/:workerId/jobs/:jobId/lease
+
+Workflows:
+  POST   /api/workflows
+  GET    /api/workflows
+  GET    /api/workflows/:workflowId
+  DELETE /api/workflows/:workflowId
+
+
+================================================================================
+END OF FLOWFORGE EXPLANATION
+================================================================================
