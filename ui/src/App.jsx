@@ -1,6 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import AnimatedBackground from './components/effects/AnimatedBackground.jsx';
 import DashboardLayout from './components/layouts/DashboardLayout.jsx';
 import JobsView from './features/jobs/components/JobsView.jsx';
 import { cancelJob, createJob, getJobStats, listJobs, seedDemoJobs } from './features/jobs/api/jobs.api.js';
@@ -47,34 +46,33 @@ export default function App() {
   const error = jobsQuery.error || workersQuery.error || workflowsQuery.error || statsQuery.error;
 
   return (
-    <>
-      <AnimatedBackground />
-      <DashboardLayout
-        activeTab={activeTab}
-        onRefresh={refresh}
-        onSeed={() => seedMutation.mutate()}
-        onTabChange={setActiveTab}
-        stats={stats}
-      >
-        {error ? (
-          <div className="alert-error mb-4">{error.message}</div>
-        ) : null}
+    <DashboardLayout
+      activeTab={activeTab}
+      onRefresh={refresh}
+      onSeed={() => seedMutation.mutate()}
+      onTabChange={setActiveTab}
+      stats={stats}
+    >
+      {error ? (
+        <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+          {error.message}
+        </div>
+      ) : null}
 
-        {activeTab === 'jobs' ? (
-          <JobsView
-            jobs={jobs}
-            onCancel={(jobId) => cancelJobMutation.mutateAsync(jobId)}
-            onCreate={(payload) => createJobMutation.mutateAsync(payload)}
-          />
-        ) : null}
-        {activeTab === 'workers' ? <WorkersView workers={workers} /> : null}
-        {activeTab === 'workflows' ? (
-          <WorkflowsView
-            workflows={workflows}
-            onCreate={(payload) => createWorkflowMutation.mutateAsync(payload)}
-          />
-        ) : null}
-      </DashboardLayout>
-    </>
+      {activeTab === 'jobs' ? (
+        <JobsView
+          jobs={jobs}
+          onCancel={(jobId) => cancelJobMutation.mutateAsync(jobId)}
+          onCreate={(payload) => createJobMutation.mutateAsync(payload)}
+        />
+      ) : null}
+      {activeTab === 'workers' ? <WorkersView workers={workers} /> : null}
+      {activeTab === 'workflows' ? (
+        <WorkflowsView
+          workflows={workflows}
+          onCreate={(payload) => createWorkflowMutation.mutateAsync(payload)}
+        />
+      ) : null}
+    </DashboardLayout>
   );
 }

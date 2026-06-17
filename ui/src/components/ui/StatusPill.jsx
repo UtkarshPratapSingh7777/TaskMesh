@@ -1,22 +1,19 @@
 const tones = {
-  PENDING: 'bg-amber-500/15 text-amber-300 ring-amber-400/30',
-  RETRYING: 'bg-amber-500/15 text-amber-300 ring-amber-400/30',
-  READY: 'bg-indigo-500/15 text-indigo-300 ring-indigo-400/30',
-  RUNNING: 'bg-emerald-500/15 text-emerald-300 ring-emerald-400/30 status-pill-running',
-  COMPLETED: 'bg-green-500/15 text-green-300 ring-green-400/30',
-  ACTIVE: 'bg-green-500/15 text-green-300 ring-green-400/30',
-  FAILED: 'bg-rose-500/15 text-rose-300 ring-rose-400/30',
-  DEAD: 'bg-rose-500/15 text-rose-300 ring-rose-400/30',
-  CANCELED: 'bg-slate-500/15 text-slate-400 ring-slate-400/20',
-  WAITING: 'bg-slate-500/15 text-slate-400 ring-slate-400/20'
+  PENDING: 'bg-amber-50 text-amber-800 ring-amber-200',
+  RETRYING: 'bg-amber-50 text-amber-800 ring-amber-200',
+  READY: 'bg-blue-50 text-blue-800 ring-blue-200',
+  RUNNING: 'bg-emerald-50 text-emerald-800 ring-emerald-200',
+  COMPLETED: 'bg-green-50 text-green-800 ring-green-200',
+  ACTIVE: 'bg-green-50 text-green-800 ring-green-200',
+  FAILED: 'bg-rose-50 text-rose-800 ring-rose-200',
+  DEAD: 'bg-rose-50 text-rose-800 ring-rose-200',
+  CANCELED: 'bg-slate-100 text-slate-700 ring-slate-200',
+  WAITING: 'bg-slate-100 text-slate-700 ring-slate-200'
 };
 
 export default function StatusPill({ status }) {
   return (
-    <span
-      className={`inline-flex min-h-6 items-center rounded-full px-2.5 text-[11px] font-bold uppercase tracking-wide ring-1 transition-all duration-300 ${tones[status] || tones.WAITING}`}
-    >
-      {status === 'RUNNING' ? <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> : null}
+    <span className={`inline-flex min-h-6 items-center rounded-full px-2 text-xs font-bold ring-1 ${tones[status] || tones.WAITING}`}>
       {status || '-'}
     </span>
   );
