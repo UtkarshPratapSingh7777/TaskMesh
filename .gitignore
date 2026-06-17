@@ -6,6 +6,4 @@ coverage/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-docker-compose.yml
-Dockerfile/
 README.md
