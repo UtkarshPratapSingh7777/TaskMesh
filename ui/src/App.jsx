@@ -54,7 +54,7 @@ export default function App() {
       stats={stats}
     >
       {error ? (
-        <div className="mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+        <div className="mb-5 rounded-xl border-2 border-red-600 bg-red-900/30 px-5 py-4 text-sm font-semibold text-red-200 shadow-lg">
           {error.message}
         </div>
       ) : null}

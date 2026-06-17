@@ -30,46 +30,46 @@ export default function JobsView({ jobs, onCancel, onCreate }) {
   }
 
   return (
-    <main className="grid gap-4 lg:grid-cols-[minmax(320px,420px)_1fr]">
-      <section className="rounded-md border border-slate-200 bg-white p-4">
+    <main className="grid gap-6 lg:grid-cols-[minmax(320px,420px)_1fr]">
+      <section className="rounded-2xl border-2 border-blue-600 bg-gradient-to-br from-blue-900/30 to-blue-800/20 p-6 shadow-xl">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-base font-black text-slate-950">Create Job</h2>
+          <h2 className="text-xl font-black bg-gradient-to-r from-blue-300 to-purple-300 bg-clip-text text-transparent">Create Job</h2>
         </div>
-        <form className="mt-4 grid gap-3" onSubmit={submit}>
-          <label className="grid gap-1 text-sm font-bold text-slate-700">
+        <form className="mt-6 grid gap-4" onSubmit={submit}>
+          <label className="grid gap-2 text-sm font-bold text-slate-200">
             Name
-            <input className="min-h-10 rounded-md border border-slate-300 px-3" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
+            <input className="min-h-11 rounded-lg border border-blue-600 bg-slate-800/50 px-4 text-white placeholder-slate-500 transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/50" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
           </label>
-          <div className="grid grid-cols-3 gap-2">
-            <label className="grid gap-1 text-sm font-bold text-slate-700">
+          <div className="grid grid-cols-3 gap-3">
+            <label className="grid gap-2 text-sm font-bold text-slate-200">
               Priority
-              <input className="min-h-10 rounded-md border border-slate-300 px-3" type="number" min="0" max="100" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} />
+              <input className="min-h-11 rounded-lg border border-purple-600 bg-slate-800/50 px-4 text-white transition focus:border-purple-400 focus:ring-2 focus:ring-purple-500/50" type="number" min="0" max="100" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} />
             </label>
-            <label className="grid gap-1 text-sm font-bold text-slate-700">
+            <label className="grid gap-2 text-sm font-bold text-slate-200">
               Delay
-              <input className="min-h-10 rounded-md border border-slate-300 px-3" type="number" min="0" value={form.delaySeconds} onChange={(event) => setForm({ ...form, delaySeconds: event.target.value })} />
+              <input className="min-h-11 rounded-lg border border-cyan-600 bg-slate-800/50 px-4 text-white transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/50" type="number" min="0" value={form.delaySeconds} onChange={(event) => setForm({ ...form, delaySeconds: event.target.value })} />
             </label>
-            <label className="grid gap-1 text-sm font-bold text-slate-700">
+            <label className="grid gap-2 text-sm font-bold text-slate-200">
               Attempts
-              <input className="min-h-10 rounded-md border border-slate-300 px-3" type="number" min="1" max="20" value={form.maxAttempts} onChange={(event) => setForm({ ...form, maxAttempts: event.target.value })} />
+              <input className="min-h-11 rounded-lg border border-green-600 bg-slate-800/50 px-4 text-white transition focus:border-green-400 focus:ring-2 focus:ring-green-500/50" type="number" min="1" max="20" value={form.maxAttempts} onChange={(event) => setForm({ ...form, maxAttempts: event.target.value })} />
             </label>
           </div>
-          <label className="grid gap-1 text-sm font-bold text-slate-700">
+          <label className="grid gap-2 text-sm font-bold text-slate-200">
             Payload
-            <textarea className="min-h-32 resize-y rounded-md border border-slate-300 px-3 py-2 font-mono text-sm" value={form.payload} onChange={(event) => setForm({ ...form, payload: event.target.value })} />
+            <textarea className="min-h-32 resize-y rounded-lg border border-pink-600 bg-slate-800/50 px-4 py-3 font-mono text-sm text-white placeholder-slate-500 transition focus:border-pink-400 focus:ring-2 focus:ring-pink-500/50" value={form.payload} onChange={(event) => setForm({ ...form, payload: event.target.value })} />
           </label>
-          {error ? <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{error}</p> : null}
-          <Button className="w-full" type="submit">
-            <Plus size={16} aria-hidden="true" />
+          {error ? <p className="rounded-lg border border-red-600 bg-red-900/30 px-4 py-3 text-sm font-semibold text-red-300 shadow-lg">{error}</p> : null}
+          <Button className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-lg py-3" type="submit">
+            <Plus size={20} aria-hidden="true" />
             Create Job
           </Button>
         </form>
       </section>
 
       <section>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="text-base font-black text-slate-950">Jobs</h2>
-          <span className="text-sm font-semibold text-slate-500">{jobs.length} total</span>
+        <div className="mb-5 flex items-center justify-between gap-3">
+          <h2 className="text-xl font-black bg-gradient-to-r from-green-300 to-emerald-300 bg-clip-text text-transparent">Jobs</h2>
+          <span className="inline-flex px-3 py-2 rounded-full bg-gradient-to-r from-green-600 to-emerald-600 text-sm font-semibold text-white shadow-lg">{jobs.length} total</span>
         </div>
         <JobTable jobs={jobs} onCancel={onCancel} />
       </section>

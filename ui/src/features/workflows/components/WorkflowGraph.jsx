@@ -2,7 +2,7 @@ import StatusPill from '../../../components/ui/StatusPill.jsx';
 
 export default function WorkflowGraph({ workflow }) {
   if (!workflow) {
-    return <div className="min-h-80 rounded-md border border-slate-200 bg-white" />;
+    return <div className="min-h-80 rounded-xl border-2 border-pink-600 bg-gradient-to-br from-pink-900/20 to-pink-800/10 shadow-xl" />;
   }
 
   const positions = layoutDag(workflow);
@@ -10,12 +10,16 @@ export default function WorkflowGraph({ workflow }) {
   const height = Math.max(340, Math.max(...[...positions.values()].map((point) => point.y)) + 120);
 
   return (
-    <div className="overflow-auto rounded-md border border-slate-200 bg-white">
+    <div className="overflow-auto rounded-xl border-2 border-pink-600 bg-gradient-to-br from-slate-800 to-slate-900 shadow-xl">
       <svg className="min-h-80 min-w-[680px] w-full" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${workflow.name} workflow graph`}>
         <defs>
           <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8" />
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#ec4899" />
           </marker>
+          <linearGradient id="nodeGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" style={{ stopColor: '#7c3aed', stopOpacity: 1 }} />
+            <stop offset="100%" style={{ stopColor: '#6d28d9', stopOpacity: 1 }} />
+          </linearGradient>
         </defs>
         {workflow.edges.map((edge) => {
           const from = positions.get(edge.from);
@@ -29,8 +33,8 @@ export default function WorkflowGraph({ workflow }) {
               fill="none"
               key={`${edge.from}:${edge.to}`}
               markerEnd="url(#arrow)"
-              stroke="#94a3b8"
-              strokeWidth="2"
+              stroke="#ec4899"
+              strokeWidth="3"
             />
           );
         })}
@@ -38,9 +42,9 @@ export default function WorkflowGraph({ workflow }) {
           const point = positions.get(node.id);
           return (
             <g key={node.id}>
-              <rect fill="#ffffff" height="72" rx="6" stroke="#cbd5e1" strokeWidth="1.5" width="160" x={point.x} y={point.y} />
-              <text fill="#0f172a" fontSize="13" fontWeight="800" x={point.x + 12} y={point.y + 27}>{node.name.slice(0, 18)}</text>
-              <text fill="#64748b" fontSize="12" fontWeight="700" x={point.x + 12} y={point.y + 51}>{node.status}</text>
+              <rect fill="url(#nodeGradient)" height="72" rx="10" stroke="#ec4899" strokeWidth="2.5" width="160" x={point.x} y={point.y} />
+              <text fill="#ffffff" fontSize="14" fontWeight="800" x={point.x + 12} y={point.y + 27}>{node.name.slice(0, 18)}</text>
+              <text fill="#e9d5ff" fontSize="11" fontWeight="700" x={point.x + 12} y={point.y + 51}>{node.status}</text>
             </g>
           );
         })}
@@ -54,10 +58,10 @@ export function WorkflowSummary({ workflow }) {
     return null;
   }
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-sm font-bold text-slate-950">{workflow.name}</span>
+    <div className="flex flex-wrap items-center gap-3">
+      <span className="text-xl font-black bg-gradient-to-r from-pink-300 to-purple-300 bg-clip-text text-transparent">{workflow.name}</span>
       <StatusPill status={workflow.status} />
-      <span className="text-sm font-semibold text-slate-500">{workflow.nodes.length} nodes</span>
+      <span className="inline-flex px-3 py-1 rounded-full bg-gradient-to-r from-orange-600 to-pink-600 text-xs font-bold text-white shadow-lg">{workflow.nodes.length} nodes</span>
     </div>
   );
 }
